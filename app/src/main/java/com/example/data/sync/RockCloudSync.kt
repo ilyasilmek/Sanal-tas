@@ -105,7 +105,8 @@ class RockCloudSync(
         val registeredMapJson = prefs.getString("registered_usernames_map", "{}") ?: "{}"
         val localRegistry = JSONObject(registeredMapJson)
 
-        val registeredUserId = localRegistry.optString(cleanName.lowercase(), null)
+        val registryKey = cleanName.lowercase()
+        val registeredUserId = if (localRegistry.has(registryKey)) localRegistry.getString(registryKey) else null
         if (registeredUserId != null && registeredUserId != currentUserId) {
             return@withContext false
         }
