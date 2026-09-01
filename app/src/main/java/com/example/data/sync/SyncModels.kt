@@ -17,17 +17,7 @@ data class SyncServerState(
     val isConnected: Boolean = true,
     val isSyncing: Boolean = false,
     val lastSyncTimestamp: Long = 0L,
-    val serverUrl: String = "https://pet-rock-global.cloud/api"
-)
-
-data class OutgoingBatch(
-    val userId: String,
-    val username: String,
-    val countryCode: String,
-    val batchClicks: Int,
-    val clientTimestamp: Long,
-    val durationSeconds: Int,
-    val signature: String
+    val serverUrl: String = "https://digital-pet-rock-sync.fly.dev"
 )
 
 sealed class RegistrationResult {
