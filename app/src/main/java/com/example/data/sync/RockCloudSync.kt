@@ -58,6 +58,11 @@ class RockCloudSync(
     private fun loadPersistedState() {
         deviceSecret = prefs.getString("device_secret", null)
 
+        val savedServerUrl = prefs.getString("server_url", null)
+        if (!savedServerUrl.isNullOrBlank()) {
+            serverUrl = savedServerUrl
+        }
+
         val totalGlobal = prefs.getLong("cached_global_clicks", 0L)
         val usersJson = prefs.getString("cached_users_json", null)
         val countriesJson = prefs.getString("cached_countries_json", null)
@@ -76,6 +81,7 @@ class RockCloudSync(
 
         _serverState.update {
             it.copy(
+                serverUrl = serverUrl,
                 globalClicks = totalGlobal,
                 topUsers = userList,
                 topCountries = countryList,
@@ -92,6 +98,9 @@ class RockCloudSync(
     fun updateServerUrl(newUrl: String) {
         if (serverUrl == newUrl) return
         serverUrl = newUrl
+        // Persist so a custom server URL (e.g. a self-hosted deployment of server/)
+        // survives an app restart instead of reverting to the compiled-in default.
+        prefs.edit().putString("server_url", newUrl).apply()
         _serverState.update { it.copy(serverUrl = newUrl) }
         scope.launch(Dispatchers.IO) {
             fetchLatestGlobalStats()
