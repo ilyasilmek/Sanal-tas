@@ -18,8 +18,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -45,7 +43,12 @@ class RockCloudSync(
     val serverState: StateFlow<SyncServerState> = _serverState.asStateFlow()
 
     private var pollJob: Job? = null
-    private var webSocket: WebSocket? = null
+
+    // Per-device HMAC signing key, minted once by the server (see
+    // ensureDeviceSecret) and cached here + in prefs. Replaces a single secret
+    // shared by every install of the app, which anyone could recover simply by
+    // decompiling the APK.
+    private var deviceSecret: String? = null
 
     // Local persistent cache for registered users and country clicks to ensure offline-first integrity
     init {
@@ -53,6 +56,8 @@ class RockCloudSync(
     }
 
     private fun loadPersistedState() {
+        deviceSecret = prefs.getString("device_secret", null)
+
         val totalGlobal = prefs.getLong("cached_global_clicks", 0L)
         val usersJson = prefs.getString("cached_users_json", null)
         val countriesJson = prefs.getString("cached_countries_json", null)
@@ -204,6 +209,45 @@ class RockCloudSync(
     }
 
     /**
+     * Lazily provisions this install's HMAC signing key from the server, minted once
+     * per userId and never re-issued (userId is publicly visible via the leaderboard,
+     * so re-issuing on repeat calls would let anyone who has seen it on the leaderboard
+     * steal that device's signing key). Cached in memory and in prefs once obtained.
+     */
+    private suspend fun ensureDeviceSecret(userId: String): String? {
+        deviceSecret?.let { return it }
+
+        return try {
+            val payload = JSONObject().apply { put("userId", userId) }
+            val request = Request.Builder()
+                .url("$serverUrl/api/device/register")
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string()
+                val secret = body?.let { JSONObject(it).optString("deviceSecret", "") }
+                if (!secret.isNullOrEmpty()) {
+                    deviceSecret = secret
+                    prefs.edit().putString("device_secret", secret).apply()
+                    secret
+                } else {
+                    null
+                }
+            } else {
+                if (response.code == 409) {
+                    Log.w(TAG, "Device secret already provisioned elsewhere for this userId; cannot recover it")
+                }
+                null
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Device registration offline, will retry: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Submits a real verified click batch to the cloud aggregator.
      */
     suspend fun sendClickBatch(
@@ -216,11 +260,17 @@ class RockCloudSync(
     ) = withContext(Dispatchers.IO) {
         if (batchClicks <= 0) return@withContext
 
+        val secret = ensureDeviceSecret(userId) ?: run {
+            Log.d(TAG, "No device signing secret yet - skipping batch, will retry on next flush")
+            return@withContext
+        }
+
         val now = System.currentTimeMillis()
         val signature = AntiCheat.signBatch(
             userId = userId,
             timestamp = now,
-            clicks = batchClicks
+            clicks = batchClicks,
+            secret = secret
         )
 
         val payload = JSONObject().apply {
@@ -253,7 +303,13 @@ class RockCloudSync(
             Log.d(TAG, "Sync to cloud offline fallback: ${e.message}")
         }
 
-        // Apply real increment locally so the user and global counts immediately reflect verified real clicks
+        // Only apply the increment and clear the local unsynced queue once the batch is
+        // actually confirmed by the server. Doing this unconditionally would silently drop
+        // clicks that failed to sync (see AppDatabase local_stats.unsynced_clicks), breaking
+        // the offline-first "no data loss" guarantee: the next periodic flush must retry the
+        // same unsynced clicks rather than have them marked as synced when they weren't.
+        if (!syncedOnline) return@withContext
+
         _serverState.update { current ->
             val newGlobalClicks = current.globalClicks + batchClicks
 

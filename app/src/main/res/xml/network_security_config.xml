@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The app talks to its sync server over HTTPS by default. Cleartext is allowed only for
+    10.0.2.2, the Android emulator's alias for the host machine's localhost, so the
+    Architecture panel's "Bulut Sunucu API Adresi" field can be pointed at a local
+    `server/` instance (npm start) during development without weakening the base policy
+    (cleartextTrafficPermitted defaults to false) for every other host.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

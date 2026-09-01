@@ -6,6 +6,10 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.math.max
 
 object AntiCheat {
+    // Test/offline-only fallback for signBatch's default parameter. Real batches sent to
+    // the reference server (see RockCloudSync.ensureDeviceSecret) are signed with a
+    // per-device secret the server mints and hands back once, never with this constant -
+    // a secret baked into every APK install can always be recovered by decompiling it.
     const val DEFAULT_HMAC_SECRET = "super_secret_rock_key_2026"
     const val MAX_HUMAN_CPS = 25
     const val MIN_TAP_INTERVAL_MS = 40L // 1000 / 25 = 40ms

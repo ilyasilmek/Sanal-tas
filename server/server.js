@@ -4,12 +4,6 @@ const express = require('express');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 8080;
-// Matches AntiCheat.DEFAULT_HMAC_SECRET on the client. A secret embedded in the
-// APK can always be extracted by decompiling it, so this only rejects
-// accidental/garbled batches - it is not real protection against an attacker
-// who has read the client source. See the PR notes for the real fix (the
-// signing secret must never live on the client).
-const HMAC_SECRET = process.env.HMAC_SECRET || 'super_secret_rock_key_2026';
 const MAX_CPS = 25;
 // The client reports its own durationSeconds; capping it here stops a batch
 // from claiming an inflated duration just to raise its own allowed click count.
@@ -24,9 +18,19 @@ const state = {
   countries: new Map(), // countryCode -> clicks
 };
 
-function verifySignature(userId, timestamp, clicks, signature) {
+// Kept separate from `state` so it can never end up serialized into a
+// leaderboard/stats response by accident.
+//
+// Each device gets its own random signing key the first time it calls
+// /api/device/register, instead of every install sharing one secret baked
+// into the APK (which anyone can recover by decompiling it). userId itself
+// is public - it's returned as `identifier` in leaderboard responses - so a
+// device's secret is only ever handed out once; see /api/device/register.
+const deviceSecrets = new Map(); // userId -> secret
+
+function verifySignature(secret, userId, timestamp, clicks, signature) {
   const payload = `${userId}:${timestamp}:${clicks}`;
-  const expected = crypto.createHmac('sha256', HMAC_SECRET).update(payload).digest('hex');
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest('hex');
   const expectedBuf = Buffer.from(expected, 'utf8');
   const givenBuf = Buffer.from(String(signature || ''), 'utf8');
   return expectedBuf.length === givenBuf.length && crypto.timingSafeEqual(expectedBuf, givenBuf);
@@ -119,13 +123,36 @@ app.post('/api/username/register', (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/device/register', (req, res) => {
+  const userId = String((req.body || {}).userId || '');
+  if (!userId) {
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+  if (deviceSecrets.has(userId)) {
+    // First registration wins. A client that never persisted the secret it was
+    // given (e.g. crashed right after receiving it) cannot recover it - that's
+    // the trade-off for not letting a public userId double as a way to fetch
+    // someone else's signing key.
+    return res.status(409).json({ error: 'already_registered' });
+  }
+
+  const deviceSecret = crypto.randomBytes(32).toString('hex');
+  deviceSecrets.set(userId, deviceSecret);
+  res.status(201).json({ deviceSecret });
+});
+
 app.post('/api/clicks/batch', (req, res) => {
   const { userId, username, countryCode, batchClicks, clientTimestamp, durationSeconds, signature } = req.body || {};
 
   if (!userId || !Number.isInteger(batchClicks) || batchClicks <= 0) {
     return res.status(400).json({ error: 'invalid_batch' });
   }
-  if (!verifySignature(userId, clientTimestamp, batchClicks, signature)) {
+
+  const deviceSecret = deviceSecrets.get(userId);
+  if (!deviceSecret) {
+    return res.status(401).json({ error: 'device_not_registered' });
+  }
+  if (!verifySignature(deviceSecret, userId, clientTimestamp, batchClicks, signature)) {
     return res.status(401).json({ error: 'invalid_signature' });
   }
 
