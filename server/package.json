@@ -1,0 +1,17 @@
+{
+  "name": "sanal-tas-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reference sync backend for the Sanal Tas Android client (in-memory demo store).",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
