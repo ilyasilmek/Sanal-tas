@@ -132,8 +132,11 @@ class RockRepository(
                     batchClicks = unsynced,
                     durationSeconds = 5,
                     onSuccess = {
+                        // Decrement by exactly what this batch covered, not a hard reset to 0 -
+                        // taps recorded while the request was in flight must stay queued for the
+                        // next flush instead of being wiped out along with the synced ones.
                         scope.launch(Dispatchers.IO) {
-                            statsDao.resetUnsyncedClicks()
+                            statsDao.decrementUnsyncedClicks(unsynced.toLong())
                         }
                     }
                 )

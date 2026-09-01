@@ -64,7 +64,9 @@ class RockViewModel(application: Application) : AndroidViewModel(application) {
     val username: StateFlow<String> = _username.asStateFlow()
 
     val userId: String = repository.getUserId()
-    val countryCode: String = repository.getCountryCode()
+
+    private val _countryCode = MutableStateFlow(repository.getCountryCode())
+    val countryCode: StateFlow<String> = _countryCode.asStateFlow()
 
     private var cpsPollJob: Job? = null
 
@@ -92,6 +94,7 @@ class RockViewModel(application: Application) : AndroidViewModel(application) {
             when (result) {
                 is RegistrationResult.Success -> {
                     _username.value = name.trim()
+                    _countryCode.value = country.uppercase()
                     _isUserRegistered.value = true
                     _nameErrorMessage.value = null
                 }
