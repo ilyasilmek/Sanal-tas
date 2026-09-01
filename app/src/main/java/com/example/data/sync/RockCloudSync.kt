@@ -253,7 +253,13 @@ class RockCloudSync(
             Log.d(TAG, "Sync to cloud offline fallback: ${e.message}")
         }
 
-        // Apply real increment locally so the user and global counts immediately reflect verified real clicks
+        // Only apply the increment and clear the local unsynced queue once the batch is
+        // actually confirmed by the server. Doing this unconditionally would silently drop
+        // clicks that failed to sync (see AppDatabase local_stats.unsynced_clicks), breaking
+        // the offline-first "no data loss" guarantee: the next periodic flush must retry the
+        // same unsynced clicks rather than have them marked as synced when they weren't.
+        if (!syncedOnline) return@withContext
+
         _serverState.update { current ->
             val newGlobalClicks = current.globalClicks + batchClicks
 

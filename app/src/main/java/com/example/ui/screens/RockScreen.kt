@@ -70,6 +70,7 @@ fun RockScreen(
     val isCheckingName by viewModel.isCheckingName.collectAsStateWithLifecycle()
     val nameErrorMessage by viewModel.nameErrorMessage.collectAsStateWithLifecycle()
     val currentUsername by viewModel.username.collectAsStateWithLifecycle()
+    val currentCountryCode by viewModel.countryCode.collectAsStateWithLifecycle()
 
     val numberFormat = remember { NumberFormat.getInstance(Locale("tr", "TR")) }
     val totalLocalClicks = localStats?.totalClicks ?: 0L
@@ -111,7 +112,7 @@ fun RockScreen(
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = countryCodeToEmoji(viewModel.countryCode), fontSize = 13.sp)
+                            Text(text = countryCodeToEmoji(currentCountryCode), fontSize = 13.sp)
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (currentUsername.isNotBlank()) currentUsername else "Oyuncu",
@@ -356,7 +357,7 @@ fun RockScreen(
             // Onboarding: Name Registration Dialog on first launch
             if (!isUserRegistered) {
                 NameRegistrationDialog(
-                    initialCountry = viewModel.countryCode,
+                    initialCountry = currentCountryCode,
                     isChecking = isCheckingName,
                     errorMessage = nameErrorMessage,
                     onSubmit = { name, country ->
@@ -373,7 +374,7 @@ fun RockScreen(
                     userClicks = totalLocalClicks,
                     userId = viewModel.userId,
                     username = currentUsername,
-                    countryCode = viewModel.countryCode,
+                    countryCode = currentCountryCode,
                     onDismiss = { viewModel.closeLeaderboard() }
                 )
             }
