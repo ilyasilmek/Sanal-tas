@@ -1,0 +1,63 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Rock Body -->
+    <path
+        android:pathData="M 54,28 C 72,28 82,38 84,54 C 86,70 78,82 54,82 C 30,82 22,70 24,54 C 26,38 36,28 54,28 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="30"
+                android:startY="30"
+                android:endX="80"
+                android:endY="80"
+                android:type="linear">
+                <item android:color="#475569" android:offset="0.0" />
+                <item android:color="#334155" android:offset="0.5" />
+                <item android:color="#1E293B" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Rock Highlight / Rim -->
+    <path
+        android:pathData="M 54,30 C 69,30 78,38 80,50 C 76,42 66,35 52,35 C 38,35 30,42 28,50 C 30,38 39,30 54,30 Z"
+        android:fillColor="#38BDF8"
+        android:fillAlpha="0.6" />
+    <!-- Left Eye -->
+    <path
+        android:pathData="M 44,52 A 4.5,4.5 0 1 1 35,52 A 4.5,4.5 0 1 1 44,52 Z"
+        android:fillColor="#F8FAFC" />
+    <path
+        android:pathData="M 42,52 A 2.2,2.2 0 1 1 37.6,52 A 2.2,2.2 0 1 1 42,52 Z"
+        android:fillColor="#0F172A" />
+    <path
+        android:pathData="M 41,50 A 1,1 0 1 1 39,50 A 1,1 0 1 1 41,50 Z"
+        android:fillColor="#38BDF8" />
+    <!-- Right Eye -->
+    <path
+        android:pathData="M 73,52 A 4.5,4.5 0 1 1 64,52 A 4.5,4.5 0 1 1 73,52 Z"
+        android:fillColor="#F8FAFC" />
+    <path
+        android:pathData="M 71,52 A 2.2,2.2 0 1 1 66.6,52 A 2.2,2.2 0 1 1 71,52 Z"
+        android:fillColor="#0F172A" />
+    <path
+        android:pathData="M 70,50 A 1,1 0 1 1 68,50 A 1,1 0 1 1 70,50 Z"
+        android:fillColor="#38BDF8" />
+    <!-- Cute Smile -->
+    <path
+        android:pathData="M 48,63 C 51,67 57,67 60,63"
+        android:strokeColor="#F8FAFC"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
+    <!-- Blush Left & Right -->
+    <path
+        android:pathData="M 33,58 A 3,1.8 0 1 1 27,58 A 3,1.8 0 1 1 33,58 Z"
+        android:fillColor="#F43F5E"
+        android:fillAlpha="0.4" />
+    <path
+        android:pathData="M 81,58 A 3,1.8 0 1 1 75,58 A 3,1.8 0 1 1 81,58 Z"
+        android:fillColor="#F43F5E"
+        android:fillAlpha="0.4" />
+</vector>

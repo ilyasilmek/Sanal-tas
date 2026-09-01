@@ -1,0 +1,6 @@
+{
+  "name": "Sanal Taş",
+  "description": "Hiçbir şey yapmamanın küresel anıtı. Local-first çevrimdışı mimarili, anti-cheat korumalı ve gerçek zamanlı küresel liderlik tablolu dijital taş.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
