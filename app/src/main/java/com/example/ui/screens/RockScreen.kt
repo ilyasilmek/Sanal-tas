@@ -371,6 +371,7 @@ fun RockScreen(
                 LeaderboardModal(
                     topCountries = serverState.topCountries,
                     topUsers = serverState.topUsers,
+                    leaderboardsByPeriod = serverState.leaderboardsByPeriod,
                     userClicks = totalLocalClicks,
                     userId = viewModel.userId,
                     username = currentUsername,

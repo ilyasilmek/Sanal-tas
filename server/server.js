@@ -14,9 +14,11 @@ const STATE_FILE = path.join(__dirname, 'server_state.json');
 
 const state = {
   globalClicks: 0,
-  users: new Map(), // userId -> { userId, username, countryCode, clicks, lastSeen }
+  // userId -> { userId, username, countryCode, clicks, lastSeen, daily, weekly, monthly }
+  // daily/weekly/monthly are { key, clicks } buckets - see recordClicks/periodClicks.
+  users: new Map(),
   usernamesByLower: new Map(), // lowercase username -> userId
-  countries: new Map(), // countryCode -> clicks
+  countries: new Map(), // countryCode -> { clicks, daily, weekly, monthly } (same bucket shape as users)
   presence: new Map(), // userId -> lastSeen timestamp, refreshed by any open app (not just click batches)
 };
 
@@ -66,6 +68,68 @@ function verifySignature(secret, userId, timestamp, clicks, signature) {
   return expectedBuf.length === givenBuf.length && crypto.timingSafeEqual(expectedBuf, givenBuf);
 }
 
+// Calendar-aligned (UTC) bucket keys for the three rolling leaderboard windows.
+// Weeks are Monday-anchored; day/month are plain UTC calendar boundaries.
+function periodKeys(ts) {
+  const d = new Date(ts);
+  const dayKey = d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const monthKey = dayKey.slice(0, 7); // YYYY-MM
+
+  const dayOfWeek = (d.getUTCDay() + 6) % 7; // 0 = Monday .. 6 = Sunday
+  const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - dayOfWeek));
+  const weekKey = monday.toISOString().slice(0, 10);
+
+  return { daily: dayKey, weekly: weekKey, monthly: monthKey };
+}
+
+// Adds `amount` to a record's all-time total and to each of its daily/weekly/monthly
+// buckets, rolling a bucket over to 0 first if its stored key has fallen behind the
+// current period (e.g. the first click of a new day/week/month).
+function recordClicks(record, amount, now) {
+  record.clicks = (record.clicks || 0) + amount;
+  const keys = periodKeys(now);
+  for (const period of ['daily', 'weekly', 'monthly']) {
+    const bucket = record[period];
+    const currentKey = keys[period];
+    if (!bucket || bucket.key !== currentKey) {
+      record[period] = { key: currentKey, clicks: amount };
+    } else {
+      bucket.clicks += amount;
+    }
+  }
+}
+
+// Reads a record's click count for a period. A bucket whose key doesn't match the
+// current period is stale (nothing has been recorded in it since the period rolled
+// over) and must read as 0 rather than whatever value it was last left at.
+function periodClicks(record, period, now) {
+  if (period === 'allTime') return record.clicks || 0;
+  const bucket = record[period];
+  if (!bucket) return 0;
+  return bucket.key === periodKeys(now)[period] ? (bucket.clicks || 0) : 0;
+}
+
+function buildLeaderboard(map, period, isCountry, now) {
+  let entries = [...map.entries()].map(([key, record]) => ({
+    key,
+    record,
+    clicks: periodClicks(record, period, now),
+  }));
+  // All-time keeps zero-click registered users visible (existing behavior); a
+  // per-period board only makes sense for people who actually played in it.
+  if (period !== 'allTime') {
+    entries = entries.filter((e) => e.clicks > 0);
+  }
+  entries.sort((a, b) => b.clicks - a.clicks);
+  entries = entries.slice(0, LEADERBOARD_SIZE);
+
+  return entries.map((e, index) =>
+    isCountry
+      ? { rank: index + 1, identifier: e.key, username: e.key, clicks: e.clicks, countryCode: e.key }
+      : { rank: index + 1, identifier: e.record.userId, username: e.record.username, clicks: e.clicks, countryCode: e.record.countryCode }
+  );
+}
+
 function touchPresence(userId) {
   if (!userId) return;
   state.presence.set(userId, Date.now());
@@ -85,33 +149,22 @@ function onlineCount() {
 }
 
 function statsPayload() {
-  const topUsers = [...state.users.values()]
-    .sort((a, b) => b.clicks - a.clicks)
-    .slice(0, LEADERBOARD_SIZE)
-    .map((user, index) => ({
-      rank: index + 1,
-      identifier: user.userId,
-      username: user.username,
-      clicks: user.clicks,
-      countryCode: user.countryCode,
-    }));
-
-  const topCountries = [...state.countries.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, LEADERBOARD_SIZE)
-    .map(([countryCode, clicks], index) => ({
-      rank: index + 1,
-      identifier: countryCode,
-      username: countryCode,
-      clicks,
-      countryCode,
-    }));
+  const now = Date.now();
+  const leaderboards = {};
+  for (const period of ['daily', 'weekly', 'monthly', 'allTime']) {
+    leaderboards[period] = {
+      topUsers: buildLeaderboard(state.users, period, false, now),
+      topCountries: buildLeaderboard(state.countries, period, true, now),
+    };
+  }
 
   return {
     globalClicks: state.globalClicks,
     onlineCount: onlineCount(),
-    topCountries,
-    topUsers,
+    // Kept for clients that only read the flat fields; always mirrors allTime.
+    topCountries: leaderboards.allTime.topCountries,
+    topUsers: leaderboards.allTime.topUsers,
+    leaderboards,
   };
 }
 
@@ -160,6 +213,9 @@ app.post('/api/username/register', (req, res) => {
     username: cleanName,
     countryCode: String(countryCode || existing?.countryCode || 'TR').toUpperCase(),
     clicks: existing?.clicks || 0,
+    daily: existing?.daily,
+    weekly: existing?.weekly,
+    monthly: existing?.monthly,
     lastSeen: Date.now(),
   });
   touchPresence(userId);
@@ -205,15 +261,24 @@ app.post('/api/clicks/batch', (req, res) => {
   }
 
   const country = String(countryCode || 'TR').toUpperCase();
-  const existing = state.users.get(userId);
-  state.users.set(userId, {
+  const now = Date.now();
+
+  const userRecord = state.users.get(userId) || {
     userId,
-    username: String(username || existing?.username || `Oyuncu_${userId.slice(-4)}`),
+    username: String(username || `Oyuncu_${userId.slice(-4)}`),
     countryCode: country,
-    clicks: (existing?.clicks || 0) + batchClicks,
-    lastSeen: Date.now(),
-  });
-  state.countries.set(country, (state.countries.get(country) || 0) + batchClicks);
+    clicks: 0,
+  };
+  userRecord.username = String(username || userRecord.username);
+  userRecord.countryCode = country;
+  userRecord.lastSeen = now;
+  recordClicks(userRecord, batchClicks, now);
+  state.users.set(userId, userRecord);
+
+  const countryRecord = state.countries.get(country) || { clicks: 0 };
+  recordClicks(countryRecord, batchClicks, now);
+  state.countries.set(country, countryRecord);
+
   state.globalClicks += batchClicks;
   touchPresence(userId);
 

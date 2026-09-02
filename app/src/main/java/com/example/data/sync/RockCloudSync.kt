@@ -70,6 +70,7 @@ class RockCloudSync(
         val totalGlobal = prefs.getLong("cached_global_clicks", 0L)
         val usersJson = prefs.getString("cached_users_json", null)
         val countriesJson = prefs.getString("cached_countries_json", null)
+        val leaderboardsJson = prefs.getString("cached_leaderboards_json", null)
 
         val userList = if (!usersJson.isNullOrEmpty()) {
             parseLeaderboardList(usersJson)
@@ -83,12 +84,23 @@ class RockCloudSync(
             emptyList()
         }
 
+        val leaderboardsByPeriod = if (!leaderboardsJson.isNullOrEmpty()) {
+            try {
+                parsePeriodLeaderboards(JSONObject(leaderboardsJson))
+            } catch (e: Exception) {
+                emptyMap()
+            }
+        } else {
+            emptyMap()
+        }
+
         _serverState.update {
             it.copy(
                 serverUrl = serverUrl,
                 globalClicks = totalGlobal,
                 topUsers = userList,
                 topCountries = countryList,
+                leaderboardsByPeriod = leaderboardsByPeriod,
                 topCountry = countryList.firstOrNull()?.countryCode ?: "TR",
                 onlineCount = prefs.getInt("cached_online_count", 1)
             )
@@ -380,17 +392,21 @@ class RockCloudSync(
         val topUsersArray = json.optJSONArray("topUsers")
         val parsedUsers = parseLeaderboardJson(topUsersArray)
 
+        val parsedLeaderboardsByPeriod = parsePeriodLeaderboards(json.optJSONObject("leaderboards"))
+
         _serverState.update { current ->
             val countries = if (parsedCountries.isNotEmpty()) parsedCountries else current.topCountries
             val users = if (parsedUsers.isNotEmpty()) parsedUsers else current.topUsers
+            val leaderboardsByPeriod = if (parsedLeaderboardsByPeriod.isNotEmpty()) parsedLeaderboardsByPeriod else current.leaderboardsByPeriod
 
-            persistState(globalClicks, users, countries)
+            persistState(globalClicks, users, countries, leaderboardsByPeriod)
 
             current.copy(
                 globalClicks = globalClicks,
                 onlineCount = if (onlineCount > 0) onlineCount else current.onlineCount,
                 topCountries = countries,
                 topUsers = users,
+                leaderboardsByPeriod = leaderboardsByPeriod,
                 topCountry = countries.firstOrNull()?.countryCode ?: current.topCountry,
                 isConnected = true,
                 lastSyncTimestamp = System.currentTimeMillis()
@@ -421,34 +437,59 @@ class RockCloudSync(
         }
     }
 
-    private fun persistState(globalClicks: Long, users: List<LeaderboardEntry>, countries: List<LeaderboardEntry>) {
-        try {
-            val usersArray = JSONArray()
-            for (u in users) {
-                usersArray.put(JSONObject().apply {
-                    put("rank", u.rank)
-                    put("identifier", u.identifier)
-                    put("username", u.username)
-                    put("clicks", u.clicks)
-                    put("countryCode", u.countryCode)
-                })
-            }
+    /**
+     * Parses the `leaderboards` object from /api/stats: { daily: { topUsers, topCountries }, ... }.
+     * A period missing from the payload (older server, or a period with no entries yet) is simply
+     * absent from the returned map rather than mapped to an empty board.
+     */
+    private fun parsePeriodLeaderboards(json: JSONObject?): Map<LeaderboardPeriod, PeriodLeaderboard> {
+        if (json == null) return emptyMap()
+        val result = mutableMapOf<LeaderboardPeriod, PeriodLeaderboard>()
+        for (period in LeaderboardPeriod.entries) {
+            val periodObj = json.optJSONObject(period.apiKey) ?: continue
+            result[period] = PeriodLeaderboard(
+                topUsers = parseLeaderboardJson(periodObj.optJSONArray("topUsers")),
+                topCountries = parseLeaderboardJson(periodObj.optJSONArray("topCountries"))
+            )
+        }
+        return result
+    }
 
-            val countriesArray = JSONArray()
-            for (c in countries) {
-                countriesArray.put(JSONObject().apply {
-                    put("rank", c.rank)
-                    put("identifier", c.identifier)
-                    put("username", c.username)
-                    put("clicks", c.clicks)
-                    put("countryCode", c.countryCode)
-                })
+    private fun leaderboardEntryToJson(entry: LeaderboardEntry): JSONObject = JSONObject().apply {
+        put("rank", entry.rank)
+        put("identifier", entry.identifier)
+        put("username", entry.username)
+        put("clicks", entry.clicks)
+        put("countryCode", entry.countryCode)
+    }
+
+    private fun leaderboardListToJson(list: List<LeaderboardEntry>): JSONArray {
+        val array = JSONArray()
+        for (entry in list) array.put(leaderboardEntryToJson(entry))
+        return array
+    }
+
+    private fun persistState(
+        globalClicks: Long,
+        users: List<LeaderboardEntry>,
+        countries: List<LeaderboardEntry>,
+        leaderboardsByPeriod: Map<LeaderboardPeriod, PeriodLeaderboard>
+    ) {
+        try {
+            val leaderboardsJson = JSONObject().apply {
+                for ((period, board) in leaderboardsByPeriod) {
+                    put(period.apiKey, JSONObject().apply {
+                        put("topUsers", leaderboardListToJson(board.topUsers))
+                        put("topCountries", leaderboardListToJson(board.topCountries))
+                    })
+                }
             }
 
             prefs.edit()
                 .putLong("cached_global_clicks", globalClicks)
-                .putString("cached_users_json", usersArray.toString())
-                .putString("cached_countries_json", countriesArray.toString())
+                .putString("cached_users_json", leaderboardListToJson(users).toString())
+                .putString("cached_countries_json", leaderboardListToJson(countries).toString())
+                .putString("cached_leaderboards_json", leaderboardsJson.toString())
                 .apply()
         } catch (e: Exception) {
             Log.e(TAG, "Error persisting online state cache: ${e.message}")
