@@ -17,7 +17,7 @@ data class SyncServerState(
     val isConnected: Boolean = true,
     val isSyncing: Boolean = false,
     val lastSyncTimestamp: Long = 0L,
-    val serverUrl: String = "https://digital-pet-rock-sync.fly.dev"
+    val serverUrl: String = "https://sanal-tas.onrender.com"
 )
 
 sealed class RegistrationResult {

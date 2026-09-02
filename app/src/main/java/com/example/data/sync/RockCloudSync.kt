@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
 class RockCloudSync(
     private val context: Context,
     private val scope: CoroutineScope,
-    private var serverUrl: String = "https://digital-pet-rock-sync.fly.dev"
+    private var serverUrl: String = "https://sanal-tas.onrender.com"
 ) {
     private val TAG = "RockCloudSync"
     private val prefs = context.getSharedPreferences("pet_rock_online_registry", Context.MODE_PRIVATE)
