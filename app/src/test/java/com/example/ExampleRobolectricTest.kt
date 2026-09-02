@@ -2,11 +2,13 @@ package com.example
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.repository.RockRepository
 import com.example.data.security.AntiCheat
 import com.example.data.security.TapRateLimiter
 import com.example.data.sync.RockCloudSync
 import com.example.data.sync.RegistrationResult
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -78,5 +80,22 @@ class ExampleRobolectricTest {
     // Short name should be rejected
     val resShort = cloudSync.registerUsername("ab", "usr_1003", "TR")
     assertTrue(resShort is RegistrationResult.Error)
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun `local clicks incrementation and unsynced tracking`() = runTest {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val testScope = TestScope()
+    val repo = RockRepository(context, testScope)
+
+    delay(200)
+
+    repeat(50) {
+      repo.incrementClick()
+    }
+
+    val stats = repo.getLocalStatsSnapshot()
+    assertTrue(stats.totalClicks >= 50L)
   }
 }

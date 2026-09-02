@@ -35,6 +35,9 @@ interface StatsDao {
 
     @Query("UPDATE local_stats SET unsynced_clicks = MAX(unsynced_clicks - :amount, 0), last_updated = :timestamp WHERE id = 1")
     suspend fun decrementUnsyncedClicks(amount: Long, timestamp: Long = System.currentTimeMillis())
+
+    @Query("UPDATE local_stats SET unsynced_clicks = unsynced_clicks + :amount, last_updated = :timestamp WHERE id = 1")
+    suspend fun addUnsyncedClicks(amount: Long, timestamp: Long = System.currentTimeMillis())
 }
 
 @Database(entities = [LocalStats::class], version = 1, exportSchema = false)

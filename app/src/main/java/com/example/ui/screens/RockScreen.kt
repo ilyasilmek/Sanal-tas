@@ -76,8 +76,8 @@ fun RockScreen(
     val totalLocalClicks = localStats?.totalClicks ?: 0L
     val unsyncedClicks = localStats?.unsyncedClicks ?: 0L
 
-    // Real global count = server global clicks + any pending unsynced clicks from this device
-    val displayedGlobalClicks = serverState.globalClicks + unsyncedClicks
+    // Real global count = server global clicks + pending unsynced clicks, bounded by local total clicks
+    val displayedGlobalClicks = maxOf(serverState.globalClicks + unsyncedClicks, totalLocalClicks)
 
     Scaffold(
         containerColor = Color(0xFF0F172A),

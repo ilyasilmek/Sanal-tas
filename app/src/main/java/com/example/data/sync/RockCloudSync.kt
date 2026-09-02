@@ -44,6 +44,10 @@ class RockCloudSync(
 
     private var pollJob: Job? = null
 
+    // Set once by start(); included on every stats poll so idle-but-open devices
+    // still register as online (see fetchLatestGlobalStats).
+    private var currentUserId: String? = null
+
     // Per-device HMAC signing key, minted once by the server (see
     // ensureDeviceSecret) and cached here + in prefs. Replaces a single secret
     // shared by every install of the app, which anyone could recover simply by
@@ -91,7 +95,8 @@ class RockCloudSync(
         }
     }
 
-    fun start() {
+    fun start(userId: String) {
+        currentUserId = userId
         startRealSyncLoop()
     }
 
@@ -246,10 +251,18 @@ class RockCloudSync(
                     null
                 }
             } else {
-                if (response.code == 409) {
-                    Log.w(TAG, "Device secret already provisioned elsewhere for this userId; cannot recover it")
+                val body = response.body?.string()
+                val secret = body?.let { JSONObject(it).optString("deviceSecret", "") }
+                if (!secret.isNullOrEmpty()) {
+                    deviceSecret = secret
+                    prefs.edit().putString("device_secret", secret).apply()
+                    secret
+                } else {
+                    if (response.code == 409) {
+                        Log.w(TAG, "Device secret already provisioned elsewhere for this userId")
+                    }
+                    null
                 }
-                null
             }
         } catch (e: Exception) {
             Log.d(TAG, "Device registration offline, will retry: ${e.message}")
@@ -308,69 +321,18 @@ class RockCloudSync(
                     handleServerStatsJson(JSONObject(body))
                 }
                 syncedOnline = true
+            } else if (response.code == 401) {
+                Log.w(TAG, "Device secret rejected (401), clearing cached secret to re-register")
+                deviceSecret = null
+                prefs.edit().remove("device_secret").apply()
             }
         } catch (e: Exception) {
             Log.d(TAG, "Sync to cloud offline fallback: ${e.message}")
         }
 
-        // Only apply the increment and clear the local unsynced queue once the batch is
-        // actually confirmed by the server. Doing this unconditionally would silently drop
-        // clicks that failed to sync (see AppDatabase local_stats.unsynced_clicks), breaking
-        // the offline-first "no data loss" guarantee: the next periodic flush must retry the
-        // same unsynced clicks rather than have them marked as synced when they weren't.
-        if (!syncedOnline) return@withContext
-
-        _serverState.update { current ->
-            val newGlobalClicks = current.globalClicks + batchClicks
-
-            // Update user clicks in leaderboard
-            val userFound = current.topUsers.any { it.identifier == userId }
-            val updatedUsers = if (userFound) {
-                current.topUsers.map {
-                    if (it.identifier == userId) it.copy(clicks = it.clicks + batchClicks, username = username, countryCode = countryCode)
-                    else it
-                }
-            } else {
-                current.topUsers + LeaderboardEntry(
-                    rank = current.topUsers.size + 1,
-                    identifier = userId,
-                    username = username,
-                    clicks = batchClicks.toLong(),
-                    countryCode = countryCode
-                )
-            }.sortedByDescending { it.clicks }.mapIndexed { index, entry -> entry.copy(rank = index + 1) }
-
-            // Update country clicks in leaderboard
-            val countryFound = current.topCountries.any { it.countryCode == countryCode }
-            val updatedCountries = if (countryFound) {
-                current.topCountries.map {
-                    if (it.countryCode == countryCode) it.copy(clicks = it.clicks + batchClicks)
-                    else it
-                }
-            } else {
-                current.topCountries + LeaderboardEntry(
-                    rank = current.topCountries.size + 1,
-                    identifier = countryCode,
-                    username = countryCode,
-                    clicks = batchClicks.toLong(),
-                    countryCode = countryCode
-                )
-            }.sortedByDescending { it.clicks }.mapIndexed { index, entry -> entry.copy(rank = index + 1) }
-
-            persistState(newGlobalClicks, updatedUsers, updatedCountries)
-
-            current.copy(
-                globalClicks = newGlobalClicks,
-                topUsers = updatedUsers,
-                topCountries = updatedCountries,
-                topCountry = updatedCountries.firstOrNull()?.countryCode ?: countryCode,
-                isConnected = true,
-                isSyncing = false,
-                lastSyncTimestamp = now
-            )
+        if (syncedOnline) {
+            onSuccess()
         }
-
-        onSuccess()
     }
 
     private fun startRealSyncLoop() {
@@ -385,8 +347,14 @@ class RockCloudSync(
 
     private suspend fun fetchLatestGlobalStats() {
         try {
+            val userId = currentUserId
+            val url = if (userId.isNullOrEmpty()) {
+                "$serverUrl/api/stats"
+            } else {
+                "$serverUrl/api/stats?userId=${java.net.URLEncoder.encode(userId, "UTF-8")}"
+            }
             val request = Request.Builder()
-                .url("$serverUrl/api/stats")
+                .url(url)
                 .get()
                 .build()
 
