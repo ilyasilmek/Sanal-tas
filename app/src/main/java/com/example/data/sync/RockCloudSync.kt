@@ -18,8 +18,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -27,7 +25,7 @@ import java.util.concurrent.TimeUnit
 class RockCloudSync(
     private val context: Context,
     private val scope: CoroutineScope,
-    private var serverUrl: String = "https://digital-pet-rock-sync.fly.dev"
+    private var serverUrl: String = "https://sanal-tas.onrender.com"
 ) {
     private val TAG = "RockCloudSync"
     private val prefs = context.getSharedPreferences("pet_rock_online_registry", Context.MODE_PRIVATE)
@@ -45,7 +43,16 @@ class RockCloudSync(
     val serverState: StateFlow<SyncServerState> = _serverState.asStateFlow()
 
     private var pollJob: Job? = null
-    private var webSocket: WebSocket? = null
+
+    // Set once by start(); included on every stats poll so idle-but-open devices
+    // still register as online (see fetchLatestGlobalStats).
+    private var currentUserId: String? = null
+
+    // Per-device HMAC signing key, minted once by the server (see
+    // ensureDeviceSecret) and cached here + in prefs. Replaces a single secret
+    // shared by every install of the app, which anyone could recover simply by
+    // decompiling the APK.
+    private var deviceSecret: String? = null
 
     // Local persistent cache for registered users and country clicks to ensure offline-first integrity
     init {
@@ -53,9 +60,17 @@ class RockCloudSync(
     }
 
     private fun loadPersistedState() {
+        deviceSecret = prefs.getString("device_secret", null)
+
+        val savedServerUrl = prefs.getString("server_url", null)
+        if (!savedServerUrl.isNullOrBlank()) {
+            serverUrl = savedServerUrl
+        }
+
         val totalGlobal = prefs.getLong("cached_global_clicks", 0L)
         val usersJson = prefs.getString("cached_users_json", null)
         val countriesJson = prefs.getString("cached_countries_json", null)
+        val leaderboardsJson = prefs.getString("cached_leaderboards_json", null)
 
         val userList = if (!usersJson.isNullOrEmpty()) {
             parseLeaderboardList(usersJson)
@@ -69,24 +84,40 @@ class RockCloudSync(
             emptyList()
         }
 
+        val leaderboardsByPeriod = if (!leaderboardsJson.isNullOrEmpty()) {
+            try {
+                parsePeriodLeaderboards(JSONObject(leaderboardsJson))
+            } catch (e: Exception) {
+                emptyMap()
+            }
+        } else {
+            emptyMap()
+        }
+
         _serverState.update {
             it.copy(
+                serverUrl = serverUrl,
                 globalClicks = totalGlobal,
                 topUsers = userList,
                 topCountries = countryList,
+                leaderboardsByPeriod = leaderboardsByPeriod,
                 topCountry = countryList.firstOrNull()?.countryCode ?: "TR",
                 onlineCount = prefs.getInt("cached_online_count", 1)
             )
         }
     }
 
-    fun start() {
+    fun start(userId: String) {
+        currentUserId = userId
         startRealSyncLoop()
     }
 
     fun updateServerUrl(newUrl: String) {
         if (serverUrl == newUrl) return
         serverUrl = newUrl
+        // Persist so a custom server URL (e.g. a self-hosted deployment of server/)
+        // survives an app restart instead of reverting to the compiled-in default.
+        prefs.edit().putString("server_url", newUrl).apply()
         _serverState.update { it.copy(serverUrl = newUrl) }
         scope.launch(Dispatchers.IO) {
             fetchLatestGlobalStats()
@@ -105,7 +136,8 @@ class RockCloudSync(
         val registeredMapJson = prefs.getString("registered_usernames_map", "{}") ?: "{}"
         val localRegistry = JSONObject(registeredMapJson)
 
-        val registeredUserId = localRegistry.optString(cleanName.lowercase(), null)
+        val registryKey = cleanName.lowercase()
+        val registeredUserId = if (localRegistry.has(registryKey)) localRegistry.getString(registryKey) else null
         if (registeredUserId != null && registeredUserId != currentUserId) {
             return@withContext false
         }
@@ -204,6 +236,53 @@ class RockCloudSync(
     }
 
     /**
+     * Lazily provisions this install's HMAC signing key from the server, minted once
+     * per userId and never re-issued (userId is publicly visible via the leaderboard,
+     * so re-issuing on repeat calls would let anyone who has seen it on the leaderboard
+     * steal that device's signing key). Cached in memory and in prefs once obtained.
+     */
+    private suspend fun ensureDeviceSecret(userId: String): String? {
+        deviceSecret?.let { return it }
+
+        return try {
+            val payload = JSONObject().apply { put("userId", userId) }
+            val request = Request.Builder()
+                .url("$serverUrl/api/device/register")
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string()
+                val secret = body?.let { JSONObject(it).optString("deviceSecret", "") }
+                if (!secret.isNullOrEmpty()) {
+                    deviceSecret = secret
+                    prefs.edit().putString("device_secret", secret).apply()
+                    secret
+                } else {
+                    null
+                }
+            } else {
+                val body = response.body?.string()
+                val secret = body?.let { JSONObject(it).optString("deviceSecret", "") }
+                if (!secret.isNullOrEmpty()) {
+                    deviceSecret = secret
+                    prefs.edit().putString("device_secret", secret).apply()
+                    secret
+                } else {
+                    if (response.code == 409) {
+                        Log.w(TAG, "Device secret already provisioned elsewhere for this userId")
+                    }
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Device registration offline, will retry: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Submits a real verified click batch to the cloud aggregator.
      */
     suspend fun sendClickBatch(
@@ -216,11 +295,17 @@ class RockCloudSync(
     ) = withContext(Dispatchers.IO) {
         if (batchClicks <= 0) return@withContext
 
+        val secret = ensureDeviceSecret(userId) ?: run {
+            Log.d(TAG, "No device signing secret yet - skipping batch, will retry on next flush")
+            return@withContext
+        }
+
         val now = System.currentTimeMillis()
         val signature = AntiCheat.signBatch(
             userId = userId,
             timestamp = now,
-            clicks = batchClicks
+            clicks = batchClicks,
+            secret = secret
         )
 
         val payload = JSONObject().apply {
@@ -248,63 +333,18 @@ class RockCloudSync(
                     handleServerStatsJson(JSONObject(body))
                 }
                 syncedOnline = true
+            } else if (response.code == 401) {
+                Log.w(TAG, "Device secret rejected (401), clearing cached secret to re-register")
+                deviceSecret = null
+                prefs.edit().remove("device_secret").apply()
             }
         } catch (e: Exception) {
             Log.d(TAG, "Sync to cloud offline fallback: ${e.message}")
         }
 
-        // Apply real increment locally so the user and global counts immediately reflect verified real clicks
-        _serverState.update { current ->
-            val newGlobalClicks = current.globalClicks + batchClicks
-
-            // Update user clicks in leaderboard
-            val userFound = current.topUsers.any { it.identifier == userId }
-            val updatedUsers = if (userFound) {
-                current.topUsers.map {
-                    if (it.identifier == userId) it.copy(clicks = it.clicks + batchClicks, username = username, countryCode = countryCode)
-                    else it
-                }
-            } else {
-                current.topUsers + LeaderboardEntry(
-                    rank = current.topUsers.size + 1,
-                    identifier = userId,
-                    username = username,
-                    clicks = batchClicks.toLong(),
-                    countryCode = countryCode
-                )
-            }.sortedByDescending { it.clicks }.mapIndexed { index, entry -> entry.copy(rank = index + 1) }
-
-            // Update country clicks in leaderboard
-            val countryFound = current.topCountries.any { it.countryCode == countryCode }
-            val updatedCountries = if (countryFound) {
-                current.topCountries.map {
-                    if (it.countryCode == countryCode) it.copy(clicks = it.clicks + batchClicks)
-                    else it
-                }
-            } else {
-                current.topCountries + LeaderboardEntry(
-                    rank = current.topCountries.size + 1,
-                    identifier = countryCode,
-                    username = countryCode,
-                    clicks = batchClicks.toLong(),
-                    countryCode = countryCode
-                )
-            }.sortedByDescending { it.clicks }.mapIndexed { index, entry -> entry.copy(rank = index + 1) }
-
-            persistState(newGlobalClicks, updatedUsers, updatedCountries)
-
-            current.copy(
-                globalClicks = newGlobalClicks,
-                topUsers = updatedUsers,
-                topCountries = updatedCountries,
-                topCountry = updatedCountries.firstOrNull()?.countryCode ?: countryCode,
-                isConnected = true,
-                isSyncing = false,
-                lastSyncTimestamp = now
-            )
+        if (syncedOnline) {
+            onSuccess()
         }
-
-        onSuccess()
     }
 
     private fun startRealSyncLoop() {
@@ -319,8 +359,14 @@ class RockCloudSync(
 
     private suspend fun fetchLatestGlobalStats() {
         try {
+            val userId = currentUserId
+            val url = if (userId.isNullOrEmpty()) {
+                "$serverUrl/api/stats"
+            } else {
+                "$serverUrl/api/stats?userId=${java.net.URLEncoder.encode(userId, "UTF-8")}"
+            }
             val request = Request.Builder()
-                .url("$serverUrl/api/stats")
+                .url(url)
                 .get()
                 .build()
 
@@ -346,17 +392,21 @@ class RockCloudSync(
         val topUsersArray = json.optJSONArray("topUsers")
         val parsedUsers = parseLeaderboardJson(topUsersArray)
 
+        val parsedLeaderboardsByPeriod = parsePeriodLeaderboards(json.optJSONObject("leaderboards"))
+
         _serverState.update { current ->
             val countries = if (parsedCountries.isNotEmpty()) parsedCountries else current.topCountries
             val users = if (parsedUsers.isNotEmpty()) parsedUsers else current.topUsers
+            val leaderboardsByPeriod = if (parsedLeaderboardsByPeriod.isNotEmpty()) parsedLeaderboardsByPeriod else current.leaderboardsByPeriod
 
-            persistState(globalClicks, users, countries)
+            persistState(globalClicks, users, countries, leaderboardsByPeriod)
 
             current.copy(
                 globalClicks = globalClicks,
                 onlineCount = if (onlineCount > 0) onlineCount else current.onlineCount,
                 topCountries = countries,
                 topUsers = users,
+                leaderboardsByPeriod = leaderboardsByPeriod,
                 topCountry = countries.firstOrNull()?.countryCode ?: current.topCountry,
                 isConnected = true,
                 lastSyncTimestamp = System.currentTimeMillis()
@@ -387,34 +437,59 @@ class RockCloudSync(
         }
     }
 
-    private fun persistState(globalClicks: Long, users: List<LeaderboardEntry>, countries: List<LeaderboardEntry>) {
-        try {
-            val usersArray = JSONArray()
-            for (u in users) {
-                usersArray.put(JSONObject().apply {
-                    put("rank", u.rank)
-                    put("identifier", u.identifier)
-                    put("username", u.username)
-                    put("clicks", u.clicks)
-                    put("countryCode", u.countryCode)
-                })
-            }
+    /**
+     * Parses the `leaderboards` object from /api/stats: { daily: { topUsers, topCountries }, ... }.
+     * A period missing from the payload (older server, or a period with no entries yet) is simply
+     * absent from the returned map rather than mapped to an empty board.
+     */
+    private fun parsePeriodLeaderboards(json: JSONObject?): Map<LeaderboardPeriod, PeriodLeaderboard> {
+        if (json == null) return emptyMap()
+        val result = mutableMapOf<LeaderboardPeriod, PeriodLeaderboard>()
+        for (period in LeaderboardPeriod.entries) {
+            val periodObj = json.optJSONObject(period.apiKey) ?: continue
+            result[period] = PeriodLeaderboard(
+                topUsers = parseLeaderboardJson(periodObj.optJSONArray("topUsers")),
+                topCountries = parseLeaderboardJson(periodObj.optJSONArray("topCountries"))
+            )
+        }
+        return result
+    }
 
-            val countriesArray = JSONArray()
-            for (c in countries) {
-                countriesArray.put(JSONObject().apply {
-                    put("rank", c.rank)
-                    put("identifier", c.identifier)
-                    put("username", c.username)
-                    put("clicks", c.clicks)
-                    put("countryCode", c.countryCode)
-                })
+    private fun leaderboardEntryToJson(entry: LeaderboardEntry): JSONObject = JSONObject().apply {
+        put("rank", entry.rank)
+        put("identifier", entry.identifier)
+        put("username", entry.username)
+        put("clicks", entry.clicks)
+        put("countryCode", entry.countryCode)
+    }
+
+    private fun leaderboardListToJson(list: List<LeaderboardEntry>): JSONArray {
+        val array = JSONArray()
+        for (entry in list) array.put(leaderboardEntryToJson(entry))
+        return array
+    }
+
+    private fun persistState(
+        globalClicks: Long,
+        users: List<LeaderboardEntry>,
+        countries: List<LeaderboardEntry>,
+        leaderboardsByPeriod: Map<LeaderboardPeriod, PeriodLeaderboard>
+    ) {
+        try {
+            val leaderboardsJson = JSONObject().apply {
+                for ((period, board) in leaderboardsByPeriod) {
+                    put(period.apiKey, JSONObject().apply {
+                        put("topUsers", leaderboardListToJson(board.topUsers))
+                        put("topCountries", leaderboardListToJson(board.topCountries))
+                    })
+                }
             }
 
             prefs.edit()
                 .putLong("cached_global_clicks", globalClicks)
-                .putString("cached_users_json", usersArray.toString())
-                .putString("cached_countries_json", countriesArray.toString())
+                .putString("cached_users_json", leaderboardListToJson(users).toString())
+                .putString("cached_countries_json", leaderboardListToJson(countries).toString())
+                .putString("cached_leaderboards_json", leaderboardsJson.toString())
                 .apply()
         } catch (e: Exception) {
             Log.e(TAG, "Error persisting online state cache: ${e.message}")

@@ -8,26 +8,29 @@ data class LeaderboardEntry(
     val countryCode: String = "TR"
 )
 
+enum class LeaderboardPeriod(val apiKey: String, val label: String) {
+    DAILY("daily", "Günlük"),
+    WEEKLY("weekly", "Haftalık"),
+    MONTHLY("monthly", "Aylık"),
+    ALL_TIME("allTime", "Tüm Zamanlar")
+}
+
+data class PeriodLeaderboard(
+    val topUsers: List<LeaderboardEntry> = emptyList(),
+    val topCountries: List<LeaderboardEntry> = emptyList()
+)
+
 data class SyncServerState(
     val globalClicks: Long = 0L,
     val topCountry: String = "TR",
     val topCountries: List<LeaderboardEntry> = emptyList(),
     val topUsers: List<LeaderboardEntry> = emptyList(),
+    val leaderboardsByPeriod: Map<LeaderboardPeriod, PeriodLeaderboard> = emptyMap(),
     val onlineCount: Int = 1,
     val isConnected: Boolean = true,
     val isSyncing: Boolean = false,
     val lastSyncTimestamp: Long = 0L,
-    val serverUrl: String = "https://pet-rock-global.cloud/api"
-)
-
-data class OutgoingBatch(
-    val userId: String,
-    val username: String,
-    val countryCode: String,
-    val batchClicks: Int,
-    val clientTimestamp: Long,
-    val durationSeconds: Int,
-    val signature: String
+    val serverUrl: String = "https://sanal-tas.onrender.com"
 )
 
 sealed class RegistrationResult {

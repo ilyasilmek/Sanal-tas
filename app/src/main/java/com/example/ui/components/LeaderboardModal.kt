@@ -33,6 +33,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,6 +46,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.sync.LeaderboardEntry
+import com.example.data.sync.LeaderboardPeriod
+import com.example.data.sync.PeriodLeaderboard
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -53,6 +56,7 @@ import java.util.Locale
 fun LeaderboardModal(
     topCountries: List<LeaderboardEntry>,
     topUsers: List<LeaderboardEntry>,
+    leaderboardsByPeriod: Map<LeaderboardPeriod, PeriodLeaderboard>,
     userClicks: Long,
     userId: String,
     username: String,
@@ -61,9 +65,19 @@ fun LeaderboardModal(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedPeriod by remember { mutableStateOf(LeaderboardPeriod.ALL_TIME) }
     val numberFormat = remember { NumberFormat.getInstance(Locale("tr", "TR")) }
 
-    // Calculate user real rank in the list
+    // All-time board falls back to the legacy flat topCountries/topUsers params so it
+    // still renders against an older server (or before the first period-aware sync).
+    val periodBoard = leaderboardsByPeriod[selectedPeriod]
+    val displayedCountries = periodBoard?.topCountries
+        ?: if (selectedPeriod == LeaderboardPeriod.ALL_TIME) topCountries else emptyList()
+    val displayedUsers = periodBoard?.topUsers
+        ?: if (selectedPeriod == LeaderboardPeriod.ALL_TIME) topUsers else emptyList()
+
+    // Calculate user real rank in the list (always against all-time - the client only
+    // tracks the user's own all-time click total locally, not a per-period breakdown)
     val calculatedUserRank = remember(topUsers, userClicks, userId) {
         val foundIndex = topUsers.indexOfFirst { it.identifier == userId || it.username.equals(username, ignoreCase = true) }
         if (foundIndex >= 0) {
@@ -135,6 +149,43 @@ fun LeaderboardModal(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Period selector (Daily / Weekly / Monthly / All-Time)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                LeaderboardPeriod.entries.forEach { period ->
+                    val isSelected = selectedPeriod == period
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSelected) Color(0xFF1E293B) else Color.Transparent)
+                            .border(
+                                width = 1.dp,
+                                color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF334155),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .clickable { selectedPeriod = period }
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = period.label,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF94A3B8),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
             // Tabs
             Box(
                 modifier = Modifier
@@ -188,7 +239,7 @@ fun LeaderboardModal(
             Spacer(modifier = Modifier.height(12.dp))
 
             // Leaderboard Items List
-            val itemsToDisplay = if (selectedTab == 0) topCountries else topUsers
+            val itemsToDisplay = if (selectedTab == 0) displayedCountries else displayedUsers
 
             if (itemsToDisplay.isEmpty()) {
                 Box(
@@ -289,7 +340,7 @@ fun LeaderboardModal(
                                 )
                             }
                             Text(
-                                text = "Senin Gerçek Skorun",
+                                text = "Tüm Zamanlar Skorun",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     color = Color(0xFF64748B)
                                 )

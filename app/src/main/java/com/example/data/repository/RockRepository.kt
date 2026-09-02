@@ -41,7 +41,7 @@ class RockRepository(
     init {
         scope.launch(Dispatchers.IO) {
             initDatabase()
-            cloudSync.start()
+            cloudSync.start(getUserId())
             startPeriodicBatchSync()
         }
     }
@@ -102,6 +102,7 @@ class RockRepository(
 
     suspend fun incrementClick() {
         withContext(Dispatchers.IO) {
+            initDatabase()
             statsDao.incrementClicks(1L)
         }
     }
@@ -111,7 +112,24 @@ class RockRepository(
         syncJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(5000)
+                reconcileUnsyncedClicks()
                 flushUnsyncedClicks()
+            }
+        }
+    }
+
+    suspend fun reconcileUnsyncedClicks() {
+        withContext(Dispatchers.IO) {
+            val stats = statsDao.getLocalStats() ?: return@withContext
+            if (stats.totalClicks <= 0) return@withContext
+
+            val userId = getUserId()
+            val userEntry = cloudSync.serverState.value.topUsers.find { it.identifier == userId }
+            val serverUserClicks = userEntry?.clicks ?: 0L
+
+            val missingFromCloud = stats.totalClicks - (serverUserClicks + stats.unsyncedClicks)
+            if (missingFromCloud > 0) {
+                statsDao.addUnsyncedClicks(missingFromCloud)
             }
         }
     }
@@ -119,24 +137,36 @@ class RockRepository(
     suspend fun flushUnsyncedClicks() {
         withContext(Dispatchers.IO) {
             val stats = statsDao.getLocalStats() ?: return@withContext
-            val unsynced = stats.unsyncedClicks.toInt()
-            if (unsynced > 0) {
+            var remainingUnsynced = stats.unsyncedClicks
+
+            if (remainingUnsynced > 0) {
                 val userId = getUserId()
                 val username = getUsername() ?: "Oyuncu_${userId.takeLast(4)}"
                 val country = getCountryCode()
 
-                cloudSync.sendClickBatch(
-                    userId = userId,
-                    username = username,
-                    countryCode = country,
-                    batchClicks = unsynced,
-                    durationSeconds = 5,
-                    onSuccess = {
-                        scope.launch(Dispatchers.IO) {
-                            statsDao.resetUnsyncedClicks()
+                while (remainingUnsynced > 0) {
+                    val batchSize = minOf(remainingUnsynced, 100L).toInt()
+                    var batchSuccess = false
+
+                    cloudSync.sendClickBatch(
+                        userId = userId,
+                        username = username,
+                        countryCode = country,
+                        batchClicks = batchSize,
+                        durationSeconds = 5,
+                        onSuccess = {
+                            batchSuccess = true
                         }
+                    )
+
+                    if (batchSuccess) {
+                        statsDao.decrementUnsyncedClicks(batchSize.toLong())
+                        remainingUnsynced -= batchSize
+                    } else {
+                        // Stop chunking on failure and retry in next sync loop
+                        break
                     }
-                )
+                }
             }
         }
     }

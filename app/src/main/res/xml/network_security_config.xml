@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The app talks to its sync server over HTTPS by default (see RockCloudSync's
+    serverUrl). Cleartext is allowed only for 10.0.2.2, the Android emulator's alias
+    for the host machine's localhost, so a developer pointing that URL at a local
+    `server/` instance (npm start) during development doesn't need cleartext enabled
+    for every other host (cleartextTrafficPermitted defaults to false).
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
