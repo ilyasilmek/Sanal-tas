@@ -23,7 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
@@ -45,7 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.ui.components.ArchitectureModal
+import com.example.ui.components.InfoModal
 import com.example.ui.components.LeaderboardModal
 import com.example.ui.components.NameRegistrationDialog
 import com.example.ui.components.PetRockView
@@ -63,7 +63,7 @@ fun RockScreen(
     val serverState by viewModel.serverState.collectAsStateWithLifecycle()
     val currentCps by viewModel.currentCps.collectAsStateWithLifecycle()
     val isLeaderboardOpen by viewModel.isLeaderboardOpen.collectAsStateWithLifecycle()
-    val isArchitectureOpen by viewModel.isArchitectureOpen.collectAsStateWithLifecycle()
+    val isInfoOpen by viewModel.isInfoOpen.collectAsStateWithLifecycle()
     val rateLimitWarning by viewModel.rateLimitWarning.collectAsStateWithLifecycle()
 
     val isUserRegistered by viewModel.isUserRegistered.collectAsStateWithLifecycle()
@@ -125,7 +125,7 @@ fun RockScreen(
                         }
                     }
 
-                    // Online Server Status & Architecture Button
+                    // Online Server Status & Info Button
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
@@ -155,19 +155,19 @@ fun RockScreen(
 
                         Spacer(modifier = Modifier.width(8.dp))
 
-                        // Architecture & System Inspector Button
+                        // Info Button
                         IconButton(
-                            onClick = { viewModel.openArchitecture() },
+                            onClick = { viewModel.openInfo() },
                             modifier = Modifier
-                                .testTag("architecture_button")
+                                .testTag("info_button")
                                 .clip(CircleShape)
                                 .background(Color(0xFF1E293B))
                                 .border(1.dp, Color(0xFF334155), CircleShape)
                                 .size(36.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Dns,
-                                contentDescription = "Mimari Bilgisi",
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Sanal Taş Nedir?",
                                 tint = Color(0xFF38BDF8),
                                 modifier = Modifier.size(16.dp)
                             )
@@ -379,19 +379,10 @@ fun RockScreen(
                 )
             }
 
-            // Architecture Modal
-            if (isArchitectureOpen) {
-                ArchitectureModal(
-                    userId = viewModel.userId,
-                    username = currentUsername,
-                    totalLocalClicks = totalLocalClicks,
-                    unsyncedClicks = unsyncedClicks,
-                    isConnected = serverState.isConnected,
-                    onlineCount = serverState.onlineCount,
-                    serverUrl = serverState.serverUrl,
-                    onUpdateServerUrl = { viewModel.updateServerUrl(it) },
-                    onForceSync = { viewModel.forceSync() },
-                    onDismiss = { viewModel.closeArchitecture() }
+            // Info Modal
+            if (isInfoOpen) {
+                InfoModal(
+                    onDismiss = { viewModel.closeInfo() }
                 )
             }
         }

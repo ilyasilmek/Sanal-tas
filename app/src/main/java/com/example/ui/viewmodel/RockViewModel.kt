@@ -44,8 +44,8 @@ class RockViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLeaderboardOpen = MutableStateFlow(false)
     val isLeaderboardOpen: StateFlow<Boolean> = _isLeaderboardOpen.asStateFlow()
 
-    private val _isArchitectureOpen = MutableStateFlow(false)
-    val isArchitectureOpen: StateFlow<Boolean> = _isArchitectureOpen.asStateFlow()
+    private val _isInfoOpen = MutableStateFlow(false)
+    val isInfoOpen: StateFlow<Boolean> = _isInfoOpen.asStateFlow()
 
     private val _rateLimitWarning = MutableStateFlow(false)
     val rateLimitWarning: StateFlow<Boolean> = _rateLimitWarning.asStateFlow()
@@ -156,21 +156,17 @@ class RockViewModel(application: Application) : AndroidViewModel(application) {
         _isLeaderboardOpen.value = false
     }
 
-    fun openArchitecture() {
-        _isArchitectureOpen.value = true
+    fun openInfo() {
+        _isInfoOpen.value = true
     }
 
-    fun closeArchitecture() {
-        _isArchitectureOpen.value = false
+    fun closeInfo() {
+        _isInfoOpen.value = false
     }
 
     fun forceSync() {
         viewModelScope.launch {
             repository.flushUnsyncedClicks()
         }
-    }
-
-    fun updateServerUrl(url: String) {
-        repository.cloudSync.updateServerUrl(url)
     }
 }
